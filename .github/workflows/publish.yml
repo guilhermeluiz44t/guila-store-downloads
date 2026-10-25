@@ -1,0 +1,115 @@
+name: Build and publish Guila apps
+on:
+  push:
+    branches: [main]
+    paths: ['requests/*.json']
+  workflow_dispatch:
+    inputs:
+      app:
+        description: Aplicativo
+        type: choice
+        options: [all, aimforge, arquivista]
+        default: all
+permissions:
+  contents: read
+concurrency:
+  group: guila-store-publications
+  cancel-in-progress: false
+jobs:
+  prepare:
+    runs-on: ubuntu-latest
+    outputs:
+      releases: ${{ steps.prepare.outputs.releases }}
+      builds: ${{ steps.prepare.outputs.builds }}
+      has_apps: ${{ steps.prepare.outputs.has_apps }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - id: prepare
+        run: node .github/scripts/prepare.mjs
+        env:
+          INPUT_APP: ${{ inputs.app }}
+          BEFORE: ${{ github.event.before }}
+  build:
+    needs: prepare
+    if: needs.prepare.outputs.has_apps == 'true'
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.builds) }}
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - name: Read private application source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ matrix.repository }}
+          ref: ${{ matrix.sha }}
+          path: source
+          ssh-key: ${{ matrix.app == 'aimforge' && secrets.SOURCE_AIMFORGE_KEY || secrets.SOURCE_ARQUIVISTA_KEY }}
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: pnpm/action-setup@v4
+        if: matrix.app == 'aimforge'
+        with:
+          version: '11.25.0'
+          run_install: false
+      - name: Install locked Electron build dependencies
+        if: matrix.app == 'aimforge'
+        run: pnpm --dir source install --frozen-lockfile --ignore-scripts
+      - name: Build and verify package
+        run: node .github/scripts/build.mjs
+        env:
+          APP_ID: ${{ matrix.app }}
+          APP_VERSION: ${{ matrix.version }}
+          SOURCE_SHA: ${{ matrix.sha }}
+          TARGET_PLATFORM: ${{ matrix.platform }}
+          TARGET_ARCH: ${{ matrix.arch }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.app }}-${{ matrix.platform }}
+          path: artifacts/*
+          if-no-files-found: error
+          retention-days: 7
+  publish:
+    needs: [prepare, build]
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.prepare.outputs.releases) }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: ${{ matrix.app }}-*
+          path: artifacts
+          merge-multiple: true
+      - name: Publish verified files and update the store
+        run: node .github/scripts/publish.mjs
+        env:
+          APP_ID: ${{ matrix.app }}
+          APP_VERSION: ${{ matrix.version }}
+          SOURCE_SHA: ${{ matrix.sha }}
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          STORE_PUBLISH_TOKEN: ${{ matrix.app == 'aimforge' && secrets.PUBLISHER_AIMFORGE || secrets.PUBLISHER_ARQUIVISTA }}

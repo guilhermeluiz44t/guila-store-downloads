@@ -38,3 +38,9 @@ A atualização oferecida pelos programas é o download da versão nova. O fluxo
 ## Versões atuais
 
 Consulte a [loja](https://guila-apps.pages.dev/) para os pacotes mais recentes. As releases com prefixo aimforge-v e arquivista-v são geradas automaticamente; os pacotes antigos permanecem disponíveis.
+
+## Novos alvos de distribuição
+
+Pulse: Windows x64 e macOS Apple Silicon/Intel (Electron, computador, teclado/mouse, métricas e dados locais). Mnemoria: os mesmos computadores em Electron e celulares/tablets Android em APK assinado (toque, voz/microfone opcionais, estudo offline e sincronização opcional). Cada pacote é aberto no sistema correspondente; o Android tem teste em emulador com rede desligada. A publicação exige todos os alvos declarados para o aplicativo. O progresso e os dados pessoais não são incluídos nos pacotes públicos.
+
+As credenciais de leitura das fontes são isoladas por aplicativo. A assinatura Android é durável e permanece nos segredos privados. As releases públicas contêm somente instaladores e manifesto com versão/hash; não contêm chaves ou dados locais.

@@ -8,7 +8,7 @@ on:
       app:
         description: Aplicativo
         type: choice
-        options: [all, aimforge, arquivista]
+        options: [all, aimforge, arquivista, pulse, mnemoria]
         default: all
 permissions:
   contents: read
@@ -53,7 +53,7 @@ jobs:
           repository: ${{ matrix.repository }}
           ref: ${{ matrix.sha }}
           path: source
-          ssh-key: ${{ matrix.app == 'aimforge' && secrets.SOURCE_AIMFORGE_KEY || secrets.SOURCE_ARQUIVISTA_KEY }}
+          ssh-key: ${{ matrix.app == 'aimforge' && secrets.SOURCE_AIMFORGE_KEY || matrix.app == 'arquivista' && secrets.SOURCE_ARQUIVISTA_KEY || matrix.app == 'pulse' && secrets.SOURCE_PULSE_KEY || secrets.SOURCE_MNEMORIA_KEY }}
           persist-credentials: false
       - uses: actions/setup-node@v4
         with:
@@ -62,13 +62,30 @@ jobs:
         with:
           python-version: '3.12'
       - uses: pnpm/action-setup@v4
-        if: matrix.app == 'aimforge'
+        if: matrix.app == 'aimforge' || matrix.platform == 'android'
         with:
           version: '11.25.0'
           run_install: false
       - name: Install locked Electron build dependencies
         if: matrix.app == 'aimforge'
         run: pnpm --dir source install --frozen-lockfile --ignore-scripts
+      - name: Install Pulse dependencies
+        if: matrix.app == 'pulse'
+        working-directory: source
+        run: npm ci
+      - name: Install Mnemoria desktop dependencies
+        if: matrix.app == 'mnemoria' && matrix.platform != 'android'
+        working-directory: source/desktop
+        run: npm ci
+      - uses: actions/setup-java@v4
+        if: matrix.platform == 'android'
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Enable Android emulator acceleration
+        if: matrix.platform == 'android'
+        run: |
+          sudo chmod 666 /dev/kvm
       - name: Build and verify package
         run: node .github/scripts/build.mjs
         env:
@@ -78,9 +95,26 @@ jobs:
           TARGET_PLATFORM: ${{ matrix.platform }}
           TARGET_ARCH: ${{ matrix.arch }}
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+          ANDROID_KEYSTORE_BASE64: ${{ matrix.platform == 'android' && secrets.MNEMORIA_ANDROID_KEYSTORE || '' }}
+          ANDROID_KEY_PASSWORD: ${{ matrix.platform == 'android' && secrets.MNEMORIA_ANDROID_PASSWORD || '' }}
+      - name: Verify offline Android app in emulator
+        if: matrix.platform == 'android'
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 35
+          arch: x86_64
+          target: google_apis
+          disable-animations: true
+          script: cd source/mobile/android && adb shell svc wifi disable && adb shell svc data disable && ./gradlew --no-daemon connectedDebugAndroidTest
+      - uses: actions/upload-artifact@v4
+        if: failure() && matrix.platform == 'android'
+        with:
+          name: android-test-reports
+          path: source/mobile/android/app/build/reports/androidTests
+
       - uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.app }}-${{ matrix.platform }}
+          name: ${{ matrix.app }}-${{ matrix.platform }}-${{ matrix.arch }}
           path: artifacts/*
           if-no-files-found: error
           retention-days: 7
@@ -112,4 +146,4 @@ jobs:
           APP_VERSION: ${{ matrix.version }}
           SOURCE_SHA: ${{ matrix.sha }}
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          STORE_PUBLISH_TOKEN: ${{ matrix.app == 'aimforge' && secrets.PUBLISHER_AIMFORGE || secrets.PUBLISHER_ARQUIVISTA }}
+          STORE_PUBLISH_TOKEN: ${{ matrix.app == 'aimforge' && secrets.PUBLISHER_AIMFORGE || matrix.app == 'arquivista' && secrets.PUBLISHER_ARQUIVISTA || matrix.app == 'pulse' && secrets.PUBLISHER_PULSE || secrets.PUBLISHER_MNEMORIA }}

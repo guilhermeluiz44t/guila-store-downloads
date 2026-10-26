@@ -1,13 +1,15 @@
 import fs from 'node:fs/promises';
+import {apps} from './apps.mjs';
 import path from 'node:path';
 import {spawnSync} from 'node:child_process';
 import {createHash} from 'node:crypto';
 const {APP_ID:app,APP_VERSION:version,SOURCE_SHA:sha,TARGET_PLATFORM:platform,TARGET_ARCH:arch}=process.env;
-if(!['aimforge','arquivista'].includes(app)||!/^\d+\.\d+\.\d+$/.test(version)||!/^[a-f0-9]{40}$/.test(sha))throw Error('Invalid build request');
+if(!apps[app]||!/^\d+\.\d+\.\d+$/.test(version)||!/^[a-f0-9]{40}$/.test(sha))throw Error('Invalid build request');
 const run=(command,args,cwd='source')=>{const result=spawnSync(command,args,{cwd,stdio:'inherit',shell:false});if(result.status!==0)throw Error(`${command} failed`);};
 const actual=spawnSync('git',['rev-parse','HEAD'],{cwd:'source',encoding:'utf8'}).stdout.trim();if(actual!==sha)throw Error('Source commit mismatch');
 await fs.mkdir('artifacts',{recursive:true});
-const filename=`${app==='aimforge'?'AimForge':'Arquivista'}-${version}-${platform}-${arch}.zip`,target=path.resolve('artifacts',filename);
+let filename=`${app==='aimforge'?'AimForge':'Arquivista'}-${version}-${platform}-${arch}.zip`,initialTarget=path.resolve('artifacts',filename);
+let target=initialTarget;
 if(app==='aimforge'){
  const pkg=JSON.parse(await fs.readFile('source/package.json','utf8'));pkg.version=version;await fs.writeFile('source/package.json',JSON.stringify(pkg,null,2));
  // Engine tests and updater trust-boundary tests run before packaging.
@@ -21,11 +23,36 @@ if(app==='aimforge'){
  else executable=path.resolve('source/releases/mac-arm64/AimForge.app/Contents/MacOS/AimForge');
  const smoke=spawnSync(executable,['--smoke-test','--disable-gpu'],{timeout:60000,env:{...process.env,GUILA_SMOKE_MARKER:marker},stdio:'inherit'});
  if(smoke.status!==0||(await fs.readFile(marker,'utf8'))!=='AIMFORGE_SMOKE_OK')throw Error('Packaged app smoke test failed');
-}else{
+}else if(app==='arquivista'){
  let init=await fs.readFile('source/arquivista/__init__.py','utf8');init=init.replace(/__version__\s*=\s*"[^"]+"/,`__version__ = "${version}"`);await fs.writeFile('source/arquivista/__init__.py',init);
  run('python',['-m','unittest','tests.test_updates']);run('python',['-c',"from arquivista.updates import get_update; result=get_update(); assert result.get('supported') and 'error' not in result; print('Live update endpoint verified by the real Python client')"]);run(process.execPath,['--check','web/app.js']);run(process.execPath,['tests/test_interface.cjs']);
  run('python',[path.resolve('.github/scripts/package-arquivista.py'),target]);
 }
+else if(platform==='android'){
+ run(process.execPath,[path.resolve('.github/scripts/build-android.mjs')],process.cwd());
+ filename=`Mnemoria-${version}-Android.apk`;target=path.resolve('artifacts',filename);
+}else{
+ const cwd=app==='mnemoria'?'source/desktop':'source';
+ const pkg=JSON.parse(await fs.readFile(cwd+'/package.json','utf8'));pkg.version=version;await fs.writeFile(cwd+'/package.json',JSON.stringify(pkg,null,2));
+ if(app==='mnemoria') {run(process.execPath,['scripts/check.mjs']);run(process.execPath,['prepare.mjs'],cwd);}
+ else {run(process.execPath,['desktop/test-all.mjs']);}
+ run(process.execPath,['node_modules/electron/install.js'],cwd);
+ if(app==='pulse') {
+  run(process.execPath,['desktop/build.mjs',platform==='windows'?'win':'mac',`--arch=${arch}`]);
+ }else{
+  run(process.execPath,['node_modules/electron-builder/cli.js',platform==='windows'?'--win':'--mac',platform==='windows'?'nsis':'dmg','--'+arch,'--publish','never'],cwd);
+ }
+ const output=app==='mnemoria'?cwd+'/release':'source/dist';
+ const extension=platform==='windows'?'.exe':'.dmg';
+ const expected=app==='mnemoria'?`Mnemoria-${version}-${platform==='windows'?'Windows-x64-Instalar.exe':`macOS-${arch}.dmg`}`:`Pulse-${version}-${platform==='windows'?'Windows-x64-Instalar.exe':`macOS-${arch}.dmg`}`;
+ filename=expected;target=path.resolve('artifacts',filename);await fs.copyFile(output+'/'+expected,target);
+ const executable=path.resolve(output,platform==='windows'?`win-unpacked/${apps[app].name}.exe`:`${arch==='arm64'?'mac-arm64':'mac'}/${apps[app].name}.app/Contents/MacOS/${apps[app].name}`);
+ const smokeData=path.resolve('smoke-data');
+ const smoke=spawnSync(executable,app==='pulse'?['--pulse-smoke-test','--disable-gpu']:['--disable-gpu'],{timeout:90000,env:{...process.env,MNEMORIA_SMOKE:'1',PULSE_SMOKE_DATA:smokeData},stdio:'inherit'});
+ if(smoke.status!==0)throw Error('Packaged runtime smoke test failed');
+ if(app==='pulse'&&!JSON.parse(await fs.readFile(smokeData+'/smoke-result.json','utf8')).ok)throw Error('Pulse smoke test failed');
+}
+
 const file=await fs.readFile(target),sha256=createHash('sha256').update(file).digest('hex');
-await fs.writeFile(`artifacts/${app}-${platform}.json`,JSON.stringify({app,version,sourceCommit:sha,filename,platform,arch,bytes:file.length,sha256},null,2));
+await fs.writeFile(`artifacts/${app}-${platform}-${arch}.json`,JSON.stringify({app,version,sourceCommit:sha,filename,platform,arch,bytes:file.length,sha256},null,2));
 console.log(`${app} ${version}: ${platform} package ready and checked`);

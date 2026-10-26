@@ -1,6 +1,6 @@
 import fs from 'node:fs/promises';
 import {execFileSync} from 'node:child_process';
-const apps={aimforge:{repository:'guilhermeluiz44t/aimforge',base:'0.4.2'},arquivista:{repository:'guilhermeluiz44t/arquivista',base:'1.0.0'}};
+import {apps} from './apps.mjs';
 const stable=v=>/^\d+\.\d+\.\d+$/.test(v??'');
 const compare=(a,b)=>{const x=a.split('.').map(Number),y=b.split('.').map(Number);for(let i=0;i<3;i++)if(x[i]!==y[i])return x[i]-y[i];return 0;};
 let selected;
@@ -15,6 +15,6 @@ for(const app of [...new Set(selected)]){
  const base=previous?.version&&stable(previous.version)?previous.version:'0.0.0';
  let version=request.baseVersion;if(compare(version,base)<=0){const parts=base.split('.').map(Number);parts[2]++;version=parts.join('.');}
  const release={app,version,sha:request.sha,repository:config.repository};releases.push(release);
- builds.push({...release,platform:'windows',arch:app==='aimforge'?'x64':'any',runner:'windows-latest'}, {...release,platform:'mac',arch:app==='aimforge'?'arm64':'any',runner:'macos-15'});
+ for(const [platform,arch,runner] of config.targets)builds.push({...release,platform,arch,runner});
 }
 await fs.appendFile(process.env.GITHUB_OUTPUT,`releases=${JSON.stringify(releases)}\nbuilds=${JSON.stringify(builds)}\nhas_apps=${releases.length>0}\n`);

@@ -25,7 +25,7 @@ if(app==='aimforge'){
  if(smoke.status!==0||(await fs.readFile(marker,'utf8'))!=='AIMFORGE_SMOKE_OK')throw Error('Packaged app smoke test failed');
 }else if(app==='arquivista'){
  let init=await fs.readFile('source/arquivista/__init__.py','utf8');init=init.replace(/__version__\s*=\s*"[^"]+"/,`__version__ = "${version}"`);await fs.writeFile('source/arquivista/__init__.py',init);
- run('python',['-m','unittest','tests.test_updates']);run('python',['-c',"from arquivista.updates import get_update; result=get_update(); assert result.get('supported') and 'error' not in result; print('Live update endpoint verified by the real Python client')"]);run(process.execPath,['--check','web/app.js']);run(process.execPath,['tests/test_interface.cjs']);
+ run('python',['-m','unittest','tests.test_updates','tests.test_foldercompare']);run('python',['-c',"from arquivista.updates import get_update; result=get_update(); assert result.get('supported') and 'error' not in result; print('Live update endpoint verified by the real Python client')"]);run(process.execPath,['--check','web/app.js']);run(process.execPath,['tests/test_interface.cjs']);
  run('python',[path.resolve('.github/scripts/package-arquivista.py'),target]);
 }
 else if(platform==='android'){

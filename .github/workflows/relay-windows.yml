@@ -51,6 +51,13 @@ jobs:
           $smoke = Join-Path $env:RUNNER_TEMP 'relay-smoke'
           Expand-Archive -LiteralPath $zip -DestinationPath $smoke
           $app = Join-Path $smoke 'Relay'
+          $install = Join-Path $app 'install.ps1'
+          try {
+            & $install
+            $com = 'Registry::HKEY_LOCAL_MACHINE\SOFTWARE\Classes\CLSID\{3F09A01B-106E-4D2B-94D0-75A1952EC89E}\InprocServer32'
+            $provider = (Get-Item -Path $com).GetValue('')
+            if (!$provider -or !(Test-Path -LiteralPath $provider -PathType Leaf)) { throw 'Relay Camera provider was not registered.' }
+          } finally { & $install -Uninstall }
           $server = Start-Process -FilePath (Join-Path $app 'node.exe') -ArgumentList 'desktop.mjs --no-open' -WorkingDirectory $app -PassThru
           try {
             $response = $null

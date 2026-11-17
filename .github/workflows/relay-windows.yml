@@ -1,0 +1,91 @@
+name: Package Relay for Windows
+on:
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: Full commit SHA from the private Relay repository
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: relay-windows-release
+  cancel-in-progress: false
+jobs:
+  build:
+    runs-on: windows-2025
+    timeout-minutes: 25
+    steps:
+      - name: Validate commit
+        shell: pwsh
+        env:
+          SOURCE_SHA: ${{ inputs.revision }}
+        run: |
+          if ($env:SOURCE_SHA -cnotmatch '^[0-9a-f]{40}$') { throw 'Provide a full Git commit SHA.' }
+      - uses: actions/checkout@v4
+        with:
+          repository: guilhermeluiz44t/relay
+          ref: ${{ inputs.revision }}
+          ssh-key: ${{ secrets.SOURCE_RELAY_KEY }}
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Build and verify Windows package
+        working-directory: source
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $true
+          npm.cmd ci
+          npm.cmd test
+          $vswhere = Join-Path ${env:ProgramFiles(x86)} 'Microsoft Visual Studio\Installer\vswhere.exe'
+          $vs = & $vswhere -latest -version '[17.0,18.0)' -products '*' -requires Microsoft.VisualStudio.Component.VC.Tools.x86.x64 -property installationPath
+          if (!$vs) { throw 'Visual Studio 2022 with C++ was not found.' }
+          Import-Module (Join-Path $vs 'Common7\Tools\Microsoft.VisualStudio.DevShell.dll')
+          Enter-VsDevShell -VsInstallPath $vs -SkipAutomaticLocation -DevCmdArguments '-arch=x64 -host_arch=x64'
+          ./scripts/windows/build.ps1
+          $zip = Join-Path $env:RUNNER_TEMP 'Relay-Windows11-x64.zip'
+          ./scripts/windows/package.ps1 -Output $zip
+          $smoke = Join-Path $env:RUNNER_TEMP 'relay-smoke'
+          Expand-Archive -LiteralPath $zip -DestinationPath $smoke
+          $app = Join-Path $smoke 'Relay'
+          $server = Start-Process -FilePath (Join-Path $app 'node.exe') -ArgumentList 'desktop.mjs --no-open' -WorkingDirectory $app -PassThru
+          try {
+            $response = $null
+            for ($i=0; $i -lt 15 -and !$response; $i++) {
+              Start-Sleep -Milliseconds 350
+              $response = try { Invoke-WebRequest 'http://127.0.0.1:5194/' -UseBasicParsing -TimeoutSec 2 } catch { $null }
+            }
+            if (!$response -or $response.Content -notmatch '<title>Relay</title>') { throw 'Packaged Relay could not start.' }
+          } finally { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
+          (Get-FileHash $zip).Hash.ToLowerInvariant() + '  Relay-Windows11-x64.zip' | Set-Content (Join-Path $env:RUNNER_TEMP 'Relay-Windows11-x64.sha256')
+      - uses: actions/upload-artifact@v4
+        with:
+          name: relay-windows-x64
+          path: |
+            ${{ runner.temp }}/Relay-Windows11-x64.zip
+            ${{ runner.temp }}/Relay-Windows11-x64.sha256
+          if-no-files-found: error
+          retention-days: 3
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: relay-windows-x64
+      - name: Publish experimental Windows download
+        env:
+          GH_TOKEN: ${{ github.token }}
+          SOURCE_SHA: ${{ inputs.revision }}
+        run: |
+          sha256sum -c Relay-Windows11-x64.sha256
+          gh release create "relay-win-preview-${SOURCE_SHA:0:8}" \
+            Relay-Windows11-x64.zip Relay-Windows11-x64.sha256 \
+            --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" --prerelease \
+            --title "Relay Camera para Windows 11 x64 (experimental)" \
+            --notes "Pacote compilado e iniciado no Windows. A integração com webcam física, Zoom e Meet ainda precisa de validação."

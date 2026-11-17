@@ -67,7 +67,8 @@ jobs:
             }
             if (!$response -or $response.Content -notmatch '<title>Relay</title>') { throw 'Packaged Relay could not start.' }
           } finally { Stop-Process -Id $server.Id -ErrorAction SilentlyContinue }
-          (Get-FileHash $zip).Hash.ToLowerInvariant() + '  Relay-Windows11-x64.zip' | Set-Content (Join-Path $env:RUNNER_TEMP 'Relay-Windows11-x64.sha256')
+          $digest = (Get-FileHash $zip).Hash.ToLowerInvariant()
+          [IO.File]::WriteAllText((Join-Path $env:RUNNER_TEMP 'Relay-Windows11-x64.sha256'), "${digest}  Relay-Windows11-x64.zip`n")
       - uses: actions/upload-artifact@v4
         with:
           name: relay-windows-x64
